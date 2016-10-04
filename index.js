@@ -162,7 +162,7 @@ function parseFile(filePath, fileContent) {
 
     var modelName = namespace + _.upperFirst(fileName);
 
-    var templateFilePath = 'templates/template.nunjucks';
+    var templateFilePath = __dirname + '/templates/template.nunjucks';
     var output = nunjucks.render(templateFilePath, {
         modelName: modelName,
         header: header,
