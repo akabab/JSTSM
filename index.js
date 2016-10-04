@@ -36,6 +36,8 @@ var argv = require('yargs')
     .describe('use-struct', 'Use `struct` (default is `class`)')
     .boolean('enable-extends')
     .describe('enable-extends', 'Enable parsing of `extends` key in json schema')
+    .boolean('deep-types')
+    .describe('deep-types', 'Read `$ref` file paths for `type` searching')
     .array('inherits')
     .describe('inherits', 'Specify inheritances')
     .array('protocols')
@@ -68,34 +70,44 @@ var namespace = argv.namespace || ""
 
 // START
 
-var srcPath = argv.s
+if (!argv.s) {
+    WARN("Missing source parameter")
+    return
+}
+
 try {
-    fs.accessSync(srcPath)
-    var stat = fs.lstatSync(srcPath)
+    fs.accessSync(argv.s)
+    var stat = fs.lstatSync(argv.s)
+
+    var src = {
+        path: argv.s,
+        isDirectory: stat.isDirectory(),
+        dir: stat.isDirectory() ? argv.s : parsePath(argv.s).dir
+    }
 
     if (stat.isDirectory()) {
-        dir.readFiles(srcPath, {
-                match: /.json$/,
-            }, function (err, fileContent, filePath, next) {
-                if (err) throw err
+        dir.readFiles(src.path, {
+            match: /.json$/,
+        }, function (err, fileContent, filePath, next) {
+            if (err) throw err
 
-                parseFile(filePath, fileContent)
-                next()
-            },
-            function (err, files){
-                if (err) throw err
-            })
-
+            parseFile(filePath, fileContent)
+            next()
+        },
+        function (err, files){
+            if (err) throw err
+        })
     }
     else if (stat.isFile()) {
-        var fileContent = fs.readFileSync(srcPath, 'utf8')
+        var fileContent = fs.readFileSync(src.path, 'utf8')
 
-        parseFile(srcPath, fileContent)
+        parseFile(src.path, fileContent)
     }
 
 } catch (e) {
     return WARN(e.message)
 }
+
 
 // METHODS
 
@@ -114,33 +126,30 @@ function parseFile(filePath, fileContent) {
 
     // Prepare
     if (json.type !== "object") {
-        console.log(filePath, "is not of type 'object'", "SKIPPED")
+        WARN(filePath, "is not of type 'object'", "SKIPPED")
         return
     }
 
-    if (!json.properties) {
-        console.log(filePath, "missing properties", "SKIPPED")
+    if (!json.properties || typeof json.properties !== "object") {
+        WARN(filePath, "missing properties", "SKIPPED")
         return
     }
 
-    var properties = []
-    if (json.properties) {
-        properties = Object.keys(json.properties).map(key => {
-            var p = json.properties[key]
+    var properties = Object.keys(json.properties).map(key => {
+        var p = json.properties[key]
 
-            var typeObject = typeObjectForProperty(p)
+        var typeObject = typeForObject(p)
 
-            var o = {
-                key: key,
-                isArr: typeObject.isArr,
-                isRef: typeObject.isRef,
-                type: typeObject.typeStr,
-                required: p.required == true || json.required.contains(key)
-            }
+        var o = {
+            key: key,
+            isArr: typeObject.isArr,
+            isRef: typeObject.isRef,
+            type: typeObject.typeStr,
+            required: p.required == true || json.required.contains(key)
+        }
 
-            return o
-        })
-    }
+        return o
+    })
 
 
     // Extends handling
@@ -148,7 +157,7 @@ function parseFile(filePath, fileContent) {
     var handleExtends = argv['enable-extends']
 
     if (handleExtends) {
-        var superClass = json.extends && typeObjectForProperty(json.extends).typeStr
+        var superClass = json.extends && typeForObject(json.extends).typeStr
     }
 
     var extendArray = prepareExtends(superClass)
@@ -199,9 +208,28 @@ function parseFile(filePath, fileContent) {
 
 // HELPERS
 
-function typeObjectForProperty(p) {
+function typeForFilePath(filePath) {
 
-    var _basicTypes = {
+    var fileContent = fs.readFileSync(filePath, 'utf8')
+
+    try {
+        var json = JSON.parse(fileContent)
+    } catch (e) {
+        WARN("Parsing error:", e)
+        return
+    }
+
+    if (typeof json !== "object") {
+        WARN(filePath, "not an object")
+        return
+    }
+
+    return typeForObject(json)
+}
+
+function typeForObject(obj) {
+
+    var BASIC_TYPES = {
         "string": "String",
         "integer": "Int",
         "number": "Double",
@@ -209,27 +237,44 @@ function typeObjectForProperty(p) {
         "any": "Any",
     }
 
-    if (typeof p !== "object") { return }
+    if (typeof obj !== "object") { return }
 
-    if (p.hasOwnProperty("$ref")) {
+    if (obj.hasOwnProperty("$ref")) {
+
+        if (argv['deep-types']) {
+            var t = typeForFilePath(src.dir + "/" + obj.$ref)
+
+            return {
+                isArr: false,
+                isRef: t.typeStr === "Object",
+                typeStr: t.typeStr === "Object" ? namespace + _.upperFirst(parsePath(obj.$ref).name) : t.typeStr
+            }
+        }
+
         return {
             isArr: false,
             isRef: true,
-            typeStr: namespace + _.upperFirst(parsePath(p.$ref).name)
+            typeStr: namespace + _.upperFirst(parsePath(obj.$ref).name)
         }
     }
 
-    if (p.hasOwnProperty("type")) {
-        switch (typeof p.type) {
+    if (obj.hasOwnProperty("type")) {
+        switch (typeof obj.type) {
             case "string":
-                switch (p.type) {
+                switch (obj.type) {
+                    case "object":
+                        return {
+                            isArr: false,
+                            isRef: false,
+                            typeStr: "Object"
+                        }
                     case "array":
-                        var itemsTypeObject = typeObjectForProperty(p.items)
+                        var itemsTypeObject = typeForObject(obj.items)
 
                         return {
                             isArr: true,
                             isRef: itemsTypeObject.isRef,
-                            typeStr: p.items ? itemsTypeObject.typeStr : "AnyObject"
+                            typeStr: obj.items ? itemsTypeObject.typeStr : "AnyObject"
                         }
                         break
                     case "string":
@@ -240,16 +285,17 @@ function typeObjectForProperty(p) {
                         return {
                             isArr: false,
                             isRef: false,
-                            typeStr: _basicTypes[p.type]
+                            typeStr: BASIC_TYPES[obj.type]
                         }
                         break
                     default:
-                        DEBUG("type not handled:", p.type)
+                        DEBUG("type not handled:", obj.type)
                         break
                 }
                 break
             default:
-                DEBUG("typeof not handled:", typeof p.type)
+                // cf. https://spacetelescope.github.io/understanding-json-schema/reference/type.html
+                DEBUG("typeof not handled:", typeof obj.type)
                 break
         }
     }
