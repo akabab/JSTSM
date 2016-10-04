@@ -197,6 +197,7 @@ function typeObjectForProperty(p) {
         "integer": "Int",
         "number": "Double",
         "boolean": "Bool",
+        "any": "Any",
     };
 
     if (typeof p !== "object") { return; }
@@ -226,6 +227,7 @@ function typeObjectForProperty(p) {
                     case "integer":
                     case "number":
                     case "boolean":
+                    case "any":
                         return {
                             isArr: false,
                             isRef: false,
