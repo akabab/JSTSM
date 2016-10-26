@@ -42,13 +42,13 @@
 
         {%- if p.required %}
     guard let {{ p.key }}JSON = json["{{ p.key }}"] as? [AnyObject] else {
-      throw JSONDecodingError.Missing("{{ p.key }}")
+      throw JSONDecodingError.missing("{{ p.key }}")
     }
 
     var {{ p.key }}: [{{ p.type }}] = []
     for _elemJSON in {{ p.key }}JSON {
       guard let elemJSON = _elemJSON as? [String: AnyObject] else {
-        throw JSONDecodingError.Invalid("{{ p.key }}", _elemJSON)
+        throw JSONDecodingError.invalid("{{ p.key }}", _elemJSON)
       }
 
       let elem = try {{ p.type }}(json: elemJSON)
@@ -63,7 +63,7 @@
       var {{ p.key }}: [{{ p.type }}] = []
       for _elemJSON in {{ p.key }}JSON {
         guard let elemJSON = _elemJSON as? [String: AnyObject] else {
-          throw JSONDecodingError.Invalid("{{ p.key }}", _elemJSON)
+          throw JSONDecodingError.invalid("{{ p.key }}", _elemJSON)
         }
 
         let elem = try {{ p.type }}(json: elemJSON)
@@ -78,7 +78,7 @@
 
         {%- if p.required %}
     guard let {{ p.key }} = json["{{ p.key }}"] as? [{{ p.type }}] else {
-      throw JSONDecodingError.Missing("{{ p.key }}")
+      throw JSONDecodingError.missing("{{ p.key }}")
     }
 
     self.{{ p.key }} = {{ p.key }}
@@ -96,7 +96,7 @@
 
         {%- if p.required %}
     guard let {{ p.key }}JSON = json["{{ p.key }}"] as? [String: AnyObject] else {
-      throw JSONDecodingError.Missing("{{ p.key }}")
+      throw JSONDecodingError.missing("{{ p.key }}")
     }
 
     self.{{ p.key }} = try {{ p.type }}(json: {{ p.key }}JSON)
@@ -112,7 +112,7 @@
 
         {%- if p.required %}
     guard let {{ p.key }} = json["{{ p.key }}"] as? {{ p.type }} else {
-      throw JSONDecodingError.Missing("{{ p.key }}")
+      throw JSONDecodingError.missing("{{ p.key }}")
     }
 
     self.{{ p.key }} = {{ p.key }}
