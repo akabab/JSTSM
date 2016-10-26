@@ -7,7 +7,6 @@ var _ = require('lodash')
 var parsePath = require('parse-filepath')
 
 var nunjucks = require('nunjucks')
-nunjucks.configure({ autoescape: false })
 
 var fs = require('fs')
 
@@ -67,6 +66,12 @@ function INFO()  { VERBOSE_LEVEL >= 1 && console.log.apply(console, arguments) }
 function DEBUG() { VERBOSE_LEVEL >= 2 && console.log.apply(console, arguments) }
 
 var namespace = argv.namespace || ""
+
+var templatesDirPath = argv.t ? parsePath(argv.t).dir : __dirname + '/templates/'
+nunjucks.configure(templatesDirPath, { autoescape: false })
+
+var defaultTemplateFile = 'template.nunjucks'
+var templateFile = argv.t ? parsePath(argv.t).base : defaultTemplateFile
 
 // START
 
@@ -179,9 +184,7 @@ function parseFile(filePath, fileContent) {
     // Render
 
     var modelName = namespace + _.upperFirst(fileName)
-
-    var templateFilePath = __dirname + '/templates/template.nunjucks'
-    var output = nunjucks.render(templateFilePath, {
+    var output = nunjucks.render(templateFile, {
         modelName: modelName,
         header: header,
         isStruct: argv['use-struct'],
