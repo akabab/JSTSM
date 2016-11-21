@@ -32,7 +32,7 @@
 
   // MARK: - Inits
 
-  {{"required " if not isStruct }}init(json: [String: AnyObject]) throws {
+  {{"required " if not isStruct }}init(json: JSON) throws {
   {% for p in properties %}
 
     // Parsing '{{ p.key }}' [{{ "required" if p.required else "optional" }}]
@@ -47,7 +47,7 @@
 
     var {{ p.key }}: [{{ p.type }}] = []
     for _elemJSON in {{ p.key }}JSON {
-      guard let elemJSON = _elemJSON as? [String: AnyObject] else {
+      guard let elemJSON = _elemJSON as? JSON else {
         throw JSONDecodingError.invalid("{{ p.key }}", _elemJSON)
       }
 
@@ -62,7 +62,7 @@
 
       var {{ p.key }}: [{{ p.type }}] = []
       for _elemJSON in {{ p.key }}JSON {
-        guard let elemJSON = _elemJSON as? [String: AnyObject] else {
+        guard let elemJSON = _elemJSON as? JSON else {
           throw JSONDecodingError.invalid("{{ p.key }}", _elemJSON)
         }
 
@@ -95,14 +95,14 @@
       {%- if p.isRef %}
 
         {%- if p.required %}
-    guard let {{ p.key }}JSON = json["{{ p.key }}"] as? [String: AnyObject] else {
+    guard let {{ p.key }}JSON = json["{{ p.key }}"] as? JSON else {
       throw JSONDecodingError.missing("{{ p.key }}")
     }
 
     self.{{ p.key }} = try {{ p.type }}(json: {{ p.key }}JSON)
 
         {%- else %} {# !required #}
-    if let {{ p.key }}JSON = json["{{ p.key }}"] as? [String: AnyObject] {
+    if let {{ p.key }}JSON = json["{{ p.key }}"] as? JSON {
       self.{{ p.key }} = try {{ p.type }}(json: {{ p.key }}JSON)
     }
 
