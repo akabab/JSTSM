@@ -1,329 +1,264 @@
-require('./utils.js')
+const fs = require('fs')
+const util = require('util')
+const path = require('path')
+const nunjucks = require('nunjucks')
 
-var dir = require('node-dir')
-var mkdirp = require('mkdirp')
+const dateformat = require('dateformat')
 
-var _ = require('lodash')
-var parsePath = require('parse-filepath')
+const capitalize = str => str[0].toUpperCase() + str.slice(1)
 
-var nunjucks = require('nunjucks')
+const argv = require('yargs')
+  .usage('Usage: $0 -s [source]')
+  .example('$0 -s model.json')
+  .example('$0 -s model.json -a Me -p MyProject -c MyCompany')
+  .example('$0 -s model.json --use-struct --namespace My')
+  .demand('s')
+  .alias('s', 'source')
+  .describe('s', 'Source file or dir')
+  .alias('o', 'output-dir')
+  .describe('o', 'Output dir')
+  .alias('t', 'template')
+  .describe('t', 'Specify template file')
+  .boolean('use-struct')
+  .describe('use-struct', 'Use `struct` (default is `class`)')
+  .boolean('enable-extends')
+  .describe('enable-extends', 'Enable parsing of `extends` key in json schema')
+  .boolean('deep-types')
+  .describe('deep-types', 'Read `$ref` file paths for `type` searching')
+  .array('inherits')
+  .describe('inherits', 'Specify inheritances')
+  .array('protocols')
+  .describe('protocols', 'Specify protocols')
+  .boolean('has-header')
+  .describe('has-header', 'Add header')
+  .alias('p', 'project')
+  .describe('p', 'Specify project name for header')
+  .alias('a', 'author')
+  .describe('a', 'Specify author name for header')
+  .alias('c', 'company')
+  .describe('c', 'Specify company name for header')
+  .alias('n', 'namespace')
+  .describe('n', 'Specify a namespace prefix')
+  .count('verbose')
+  .alias('v', 'verbose')
+  .describe('v', 'Specify verbosity level (eg. -vv = Level 2)')
+  .help('h')
+  .alias('h', 'help')
+  .epilog('copyright - akabab 2016')
+  .argv
 
-var fs = require('fs')
+const VERBOSE_LEVEL = argv.verbose || 0
 
-// var jsonschema = require('jsonschema')
-// var draft4schema = JSON.parse(fs.readFileSync("./draft_schemas/draft-04/schema.json", 'utf8'))
-// console.log("draft4schema:", draft4schema)
-// var v = jsonschema.validate(json, draft4schema)
-// var v = jsonschema.validate({"one": 1}, draft4schema)
-// console.log("v:", v)
+const WARN = () => { VERBOSE_LEVEL >= 0 && console.log.apply(console, arguments) }
+const INFO = () => { VERBOSE_LEVEL >= 1 && console.log.apply(console, arguments) }
+const DEBUG = () => { VERBOSE_LEVEL >= 2 && console.log.apply(console, arguments) }
 
-var dateformat = require('dateformat')
+const namespace = argv.namespace || ''
 
-var argv = require('yargs')
-    .usage('Usage: $0 -s [source]')
-    .example('$0 -s model.json')
-    .example('$0 -s model.json -a Me -p MyProject -c MyCompany')
-    .example('$0 -s model.json --use-struct --namespace My')
-    .demand('s')
-    .alias('s', 'source')
-    .describe('s', 'Source file or dir')
-    .alias('o', 'output-dir')
-    .describe('o', 'Output dir')
-    .alias('t', 'template')
-    .describe('t', 'Specify template file')
-    .boolean('use-struct')
-    .describe('use-struct', 'Use `struct` (default is `class`)')
-    .boolean('enable-extends')
-    .describe('enable-extends', 'Enable parsing of `extends` key in json schema')
-    .boolean('deep-types')
-    .describe('deep-types', 'Read `$ref` file paths for `type` searching')
-    .array('inherits')
-    .describe('inherits', 'Specify inheritances')
-    .array('protocols')
-    .describe('protocols', 'Specify protocols')
-    .boolean('has-header')
-    .describe('has-header', 'Add header')
-    .alias('p', 'project')
-    .describe('p', 'Specify project name for header')
-    .alias('a', 'author')
-    .describe('a', 'Specify author name for header')
-    .alias('c', 'company')
-    .describe('c', 'Specify company name for header')
-    .alias('n', 'namespace')
-    .describe('n', 'Specify a namespace prefix')
-    .count('verbose')
-    .alias('v', 'verbose')
-    .describe('v', 'Specify verbosity level (eg. -vv = Level 2)')
-    .help('h')
-    .alias('h', 'help')
-    .epilog('copyright - akabab 2016')
-    .argv
-
-VERBOSE_LEVEL = argv.verbose
-
-function WARN()  { VERBOSE_LEVEL >= 0 && console.log.apply(console, arguments) }
-function INFO()  { VERBOSE_LEVEL >= 1 && console.log.apply(console, arguments) }
-function DEBUG() { VERBOSE_LEVEL >= 2 && console.log.apply(console, arguments) }
-
-var namespace = argv.namespace || ""
-
-var templatesDirPath = argv.t ? parsePath(argv.t).dir : __dirname + '/templates/'
+const templatesDirPath = argv.t ? path.parse(argv.t).dir : __dirname + '/templates/'
 nunjucks.configure(templatesDirPath, { autoescape: false })
 
-var defaultTemplateFile = 'template.nunjucks'
-var templateFile = argv.t ? parsePath(argv.t).base : defaultTemplateFile
+const defaultTemplateFile = 'template.nunjucks'
+const templateFile = argv.t ? path.parse(argv.t).base : defaultTemplateFile
 
-// START
+if (!argv.s) return WARN('Missing source parameter')
 
-if (!argv.s) {
-    WARN("Missing source parameter")
-    return
+const lstat = util.promisify(fs.lstat)
+const readdir = util.promisify(fs.readdir)
+const readFile = util.promisify(fs.readFile)
+const writeFile = util.promisify(fs.writeFile)
+const mkdirp = util.promisify(fs.mkdir)
+
+const getFileInfos = async filePath => {
+  const absolutePath = path.resolve(filePath)
+  const stats = await lstat(filePath)
+
+  return {
+    ...path.parse(absolutePath),
+    absolutePath,
+    relativePath: filePath,
+    isDirectory: stats.isDirectory()
+  }
 }
 
-try {
-    fs.accessSync(argv.s)
-    var stat = fs.lstatSync(argv.s)
+const getFiles = async dir => (await readdir(dir)).map(file => path.join(dir, file))
 
-    var src = {
-        path: argv.s,
-        isDirectory: stat.isDirectory(),
-        dir: stat.isDirectory() ? argv.s : parsePath(argv.s).dir
-    }
+const jstsm = async src => {
+  const stats = await lstat(src)
+  const filenames = stats.isDirectory() ? await getFiles(src) : [ src ]
 
-    if (stat.isDirectory()) {
-        dir.readFiles(src.path, {
-            match: /.json$/,
-        }, function (err, fileContent, filePath, next) {
-            if (err) throw err
+  const files = await Promise.all(filenames.map(getFileInfos))
+  const jsonfiles = files.filter(file => !file.isDirectory && file.ext === '.json')
 
-            parseFile(filePath, fileContent)
-            next()
-        },
-        function (err, files){
-            if (err) throw err
-        })
-    }
-    else if (stat.isFile()) {
-        var fileContent = fs.readFileSync(src.path, 'utf8')
+  // content
+  const validfiles = await Promise.all(jsonfiles.map(async file => {
+    file.content = await readFile(file.absolutePath, 'utf8').then(JSON.parse)
+    return file
+  }))
 
-        parseFile(src.path, fileContent)
-    }
-
-} catch (e) {
-    return WARN(e.message)
+  return validfiles
 }
 
+const getHeader = ({ project, author, company }) => {
+  const now = new Date()
 
-// METHODS
+  return {
+    projectName: project || '<PROJECT>',
+    author: author || '<AUTHOR>',
+    now: dateformat(now, 'dd/mm/yy'),
+    copyright: `${now.getFullYear()} ${(company || '<COMPANY>')}`,
+  }
+}
 
-function parseFile(filePath, fileContent) {
-    INFO("> Parsing", filePath)
-    var fileName = parsePath(filePath).name
+const parsePropsFromJson = json => Object.keys(json.properties)
+  .map(key => {
+    const prop = json.properties[key]
+    const type = getType(prop)
 
-    try {
-        var json = JSON.parse(fileContent)
-    } catch (e) {
-        return WARN("Parsing error:", e)
+    return {
+      key: key,
+      isArr: type.isArr,
+      isRef: type.isRef,
+      type: type.typeStr,
+      required: prop.required || json.required.includes(key)
     }
+  })
 
-    // TODO: Validate
+const analyzeFile = file => {
+  const json = file.content
 
+  if (json.type !== 'object') { return WARN(path, 'is not of type object', 'SKIPPED') }
 
-    // Prepare
-    if (json.type !== "object") {
-        WARN(filePath, "is not of type 'object'", "SKIPPED")
-        return
-    }
+  if (!json.properties || typeof json.properties !== 'object') { return WARN(path, 'missing properties', 'SKIPPED') }
 
-    if (!json.properties || typeof json.properties !== "object") {
-        WARN(filePath, "missing properties", "SKIPPED")
-        return
-    }
+  // Extends handling
+  const superClass = argv['enable-extends'] && json.extends && getType(json.extends).typeStr
 
-    var properties = Object.keys(json.properties).map(key => {
-        var p = json.properties[key]
+  const extendArray = prepareExtends(superClass)
 
-        var typeObject = typeForObject(p)
+  // Render
 
-        var o = {
-            key: key,
-            isArr: typeObject.isArr,
-            isRef: typeObject.isRef,
-            type: typeObject.typeStr,
-            required: p.required == true || json.required.contains(key)
-        }
+  const props = {
+    modelName: namespace + capitalize(file.name),
+    header: argv['has-header'] && getHeader(argv),
+    isStruct: argv['use-struct'],
+    extends: (extendArray && extendArray.length > 0) ? extendArray : false,
+    hasSuperClass: !!superClass,
+    properties: parsePropsFromJson(json),
+  }
 
-        return o
-    })
+  const output = nunjucks.render(templateFile, props)
 
+  // Write
 
-    // Extends handling
+  const outputDir = argv.o || './output'
+  const destPath = `${outputDir}/${props.modelName}.swift`
 
-    var handleExtends = argv['enable-extends']
-
-    if (handleExtends) {
-        var superClass = json.extends && typeForObject(json.extends).typeStr
-    }
-
-    var extendArray = prepareExtends(superClass)
-
-
-    // Header
-
-    if (argv['has-header']) {
-        var now = new Date()
-        var header = {
-            projectName: argv.project || "<PROJECT_NAME>",
-            author: argv.author || "<AUTHOR>",
-            now: dateformat(now, "dd/mm/yy"),
-            copyright: now.getFullYear() + " " + (argv.company || "<COMPANY>"), // eg. Copyright © 2016 OpenJet
-        }
-    }
-
-
-    // Render
-
-    var modelName = namespace + _.upperFirst(fileName)
-    var output = nunjucks.render(templateFile, {
-        modelName: modelName,
-        header: header,
-        isStruct: argv['use-struct'],
-        extends: (extendArray && extendArray.length > 0) ? extendArray : false,
-        hasSuperClass: !!superClass,
-        properties: properties
-    })
-
-
-    // Write
-
-    var outputDir = argv.o || './output'
-    mkdirp(outputDir)
-
-    var destFilePath = outputDir + "/" + modelName + ".swift"
-
-    fs.writeFile(destFilePath, output, function (err) {
-        if (err) { return WARN(err) }
-
-        INFO("File saved to:", destFilePath)
-    })
-
+  const noop = _ => _
+  mkdirp(outputDir).catch(noop)
+    .then(() => writeFile(destPath, output)
+      .then(() => console.log(`${destPath} success`), console.error))
 }
 
 // HELPERS
 
-function typeForFilePath(filePath) {
-
-    var fileContent = fs.readFileSync(filePath, 'utf8')
-
-    try {
-        var json = JSON.parse(fileContent)
-    } catch (e) {
-        WARN("Parsing error:", e)
-        return
-    }
-
-    if (typeof json !== "object") {
-        WARN(filePath, "not an object")
-        return
-    }
-
-    return typeForObject(json)
+const BASIC_TYPES = {
+  'string': 'String',
+  'integer': 'Int',
+  'number': 'Double',
+  'boolean': 'Bool',
+  'any': 'Any',
 }
 
-function typeForObject(obj) {
+const getType = obj => {
 
-    var BASIC_TYPES = {
-        "string": "String",
-        "integer": "Int",
-        "number": "Double",
-        "boolean": "Bool",
-        "any": "Any",
+  if (typeof obj !== 'object') { return }
+
+  if (obj.hasOwnProperty('$ref')) {
+    // if (argv['deep-types']) {
+    //   const t = typeForFilePath(src.dir + '/' + obj.$ref) // getFile -> getType(file.content)
+
+    //   return {
+    //     isArr: false,
+    //     isRef: t.typeStr === 'Object',
+    //     typeStr: t.typeStr === 'Object' ? namespace + capitalize(path.parse(obj.$ref).name) : t.typeStr
+    //   }
+    // }
+
+    return {
+      isArr: false,
+      isRef: true,
+      typeStr: namespace + capitalize(path.parse(obj.$ref).name)
     }
+  }
 
-    if (typeof obj !== "object") { return }
-
-    if (obj.hasOwnProperty("$ref")) {
-
-        if (argv['deep-types']) {
-            var t = typeForFilePath(src.dir + "/" + obj.$ref)
-
+  if (obj.hasOwnProperty('type')) {
+    switch (typeof obj.type) {
+      case 'string':
+        switch (obj.type) {
+          case 'object':
             return {
-                isArr: false,
-                isRef: t.typeStr === "Object",
-                typeStr: t.typeStr === "Object" ? namespace + _.upperFirst(parsePath(obj.$ref).name) : t.typeStr
+              isArr: false,
+              isRef: false,
+              typeStr: 'Object'
             }
-        }
 
-        return {
-            isArr: false,
-            isRef: true,
-            typeStr: namespace + _.upperFirst(parsePath(obj.$ref).name)
-        }
-    }
+            case 'array':
+              const itemsTypeObject = getType(obj.items)
 
-    if (obj.hasOwnProperty("type")) {
-        switch (typeof obj.type) {
-            case "string":
-                switch (obj.type) {
-                    case "object":
-                        return {
-                            isArr: false,
-                            isRef: false,
-                            typeStr: "Object"
-                        }
-                    case "array":
-                        var itemsTypeObject = typeForObject(obj.items)
+              return {
+                isArr: true,
+                isRef: !!itemsTypeObject && itemsTypeObject.isRef,
+                typeStr: itemsTypeObject ? itemsTypeObject.typeStr : 'AnyObject'
+              }
 
-                        return {
-                            isArr: true,
-                            isRef: itemsTypeObject.isRef,
-                            typeStr: obj.items ? itemsTypeObject.typeStr : "AnyObject"
-                        }
-                        break
-                    case "string":
-                    case "integer":
-                    case "number":
-                    case "boolean":
-                    case "any":
-                        return {
-                            isArr: false,
-                            isRef: false,
-                            typeStr: BASIC_TYPES[obj.type]
-                        }
-                        break
-                    default:
-                        DEBUG("type not handled:", obj.type)
-                        break
-                }
-                break
+            case 'string':
+            case 'integer':
+            case 'number':
+            case 'boolean':
+            case 'any':
+              return {
+                isArr: false,
+                isRef: false,
+                typeStr: BASIC_TYPES[obj.type]
+              }
+
             default:
-                // cf. https://spacetelescope.github.io/understanding-json-schema/reference/type.html
-                DEBUG("typeof not handled:", typeof obj.type)
-                break
-        }
+              DEBUG('type not handled:', obj.type)
+              break
+          }
+      default:
+        // cf. https://spacetelescope.github.io/understanding-json-schema/reference/type.html
+        DEBUG('typeof not handled:', typeof obj.type)
+        break
     }
+  }
+
 }
 
-function prepareExtends(superClass) {
-    var extendArray = []
+const prepareExtends = (superClass) => {
+  let extendArray = []
 
-    if (superClass) {
-        extendArray.push(superClass)
-    }
+  if (superClass) {
+    extendArray.push(superClass)
+  }
 
-    var isStruct = argv['use-struct']
+  const isStruct = argv['use-struct']
 
-    var inherits = argv.inherits
-    if (inherits && inherits.length) {
-        if (isStruct) { return INFO("inheritance ignored with struct") }
+  const inherits = argv.inherits
+  if (inherits && inherits.length) {
+    if (isStruct) return WARN('inheritance ignored with struct')
 
-        extendArray = inherits
-    }
+    extendArray = inherits
+  }
 
-    var protocols = argv.protocols
-    if (!superClass && protocols && protocols.length) {
-        extendArray = extendArray.concat(protocols)
-    }
+  const protocols = argv.protocols
+  if (!superClass && protocols && protocols.length) {
+    extendArray = extendArray.concat(protocols)
+  }
 
-    return extendArray
+  return extendArray
 }
+
+jstsm(argv.s).then(files => files.forEach(analyzeFile))
+  .catch(err => console.error('catched', err))
